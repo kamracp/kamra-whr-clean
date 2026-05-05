@@ -1,90 +1,143 @@
 import math
 
+# ---------------- GAS PROPERTIES ----------------
+def gas_props(T):
+    rho = 1.2 * (273/(T+273))
+    cp = 0.24
+    return rho, cp
+
 # ---------------- HEAT ----------------
 def heat_available(V, T1, T2):
-    rho = 1.2 * (273/(T1+273))
+    rho, cp = gas_props(T1)
     m = V * rho
-    cp = 0.24
     Q = m * cp * (T1 - T2)
     return Q, m
 
-
 # ---------------- STEAM ----------------
 def steam_generation(Q, P, fw):
-    return Q / 540000
+    return max(Q,0) / 540000
 
+# ---------------- DEW POINT ----------------
+def dew_point_water(H2O_pct):
+    return 100 + 12 * math.log(max(H2O_pct,1))
+
+def acid_dew_point(SO2_ppm):
+    if SO2_ppm < 50:
+        return 120
+    return 120 + 0.04 * SO2_ppm
+
+# ---------------- ZUKAUSKAS ----------------
+def zukauskas_htc(v, d, rho, mu=2e-5, k=0.03, Pr=0.7):
+    Re = rho * v * d / mu
+
+    if Re < 100:
+        C, m = 0.9, 0.4
+    elif Re < 1000:
+        C, m = 0.52, 0.5
+    else:
+        C, m = 0.27, 0.63
+
+    Nu = C * (Re**m) * (Pr**0.36)
+    h = Nu * k / d
+
+    return h, Re
+
+# ---------------- LMTD ----------------
+def lmtd(dT1, dT2):
+    if dT1 <= 0 or dT2 <= 0:
+        return 1
+    return (dT1 - dT2) / math.log(dT1/dT2)
+
+# ---------------- FAN ----------------
+def fan_selection(m, rho, dp, eff=0.7):
+    flow = (m/3600)/rho
+    power = flow * dp * 9.81 / (1000 * eff)
+
+    if dp < 30:
+        draft = "Natural Draft"
+    elif dp < 150:
+        draft = "Induced Draft"
+    else:
+        draft = "Forced Draft"
+
+    return flow, power, draft
 
 # ---------------- OPTIMIZER ----------------
-def geometry_optimizer(Q, m, T, T_sat, fw, P):
+def advanced_optimizer(V, T_in, fw_in, P, pinch, approach):
+
+    Q, m = heat_available(V, T_in, T_in-100)
+
+    T_sat = 100 + 5*P
+    T_gas_out = T_sat + pinch
+    T_fw_out = T_sat - approach
 
     best = None
     best_score = -1
 
-    for d in [0.038, 0.05]:
-        for L in [2.5, 3, 3.5]:
-            for pitch_ratio in [1.3, 1.4, 1.5]:
+    rho, cp = gas_props(T_in)
+    m_sec = m/3600
 
-                pitch = d * pitch_ratio
-                free_area = pitch**2 - (math.pi * d**2 / 4)
+    for d in [0.032, 0.038, 0.05]:
+        for L in [2.5, 3, 3.5]:
+            for pr in [1.3, 1.4, 1.5]:
+
+                pitch = d * pr
+                free_area = pitch**2 - (math.pi*d*d/4)
 
                 if free_area <= 0:
                     continue
 
-                rho = 1.2 * (273/(T+273))
-                m_sec = m / 3600
-
-                # 🎯 Target velocity
                 v_target = 10
-                flow_area_target = m_sec / (rho * v_target)
-                tubes = max(int(flow_area_target / free_area), 50)
+                area_req = m_sec / (rho * v_target)
+                tubes = max(int(area_req / free_area), 40)
 
                 flow_area = tubes * free_area
                 v = m_sec / (rho * flow_area)
 
-                rows = max(int(math.sqrt(tubes)),1)
-                dp = 1.5 * rows * (rho * v*v / 2) / 9.81
+                rows = int(math.sqrt(tubes))
+                dp = 1.3 * rows * (rho * v*v / 2) / 9.81
 
-                # 🔥 Pinch / Approach scan
-                for pinch in range(5, 15):
-                    for approach in range(5, 12):
+                h, Re = zukauskas_htc(v, d, rho)
 
-                        T_out = T_sat + pinch
+                U = 1 / (1/h + 0.0005)
 
-                        Q_evap = m * 0.24 * (T - T_out)
-                        Q_evap = max(Q_evap, 0)
+                LMTD = lmtd((T_in - T_fw_out), (T_gas_out - fw_in))
 
-                        tph = steam_generation(Q_evap, P, fw)
+                A_required = Q / (U * LMTD)
+                A_actual = tubes * math.pi * d * L
 
-                        # ---------------- SCORE ENGINE ----------------
-                        score = tph
+                tph = steam_generation(Q, P, fw_in)
 
-                        # Velocity control
-                        if v > 12:
-                            score *= 0.6
-                        elif v < 7:
-                            score *= 0.7
+                score = tph
 
-                        # Pressure drop control
-                        if dp > 100:
-                            score *= 0.5
-                        elif dp < 30:
-                            score *= 0.8
+                if v < 8 or v > 12:
+                    score *= 0.7
 
-                        # Pinch realism
-                        if pinch <= 5:
-                            score *= 0.6
+                if dp > 90:
+                    score *= 0.6
 
-                        # Approach realism
-                        if approach < 6:
-                            score *= 0.7
+                if A_actual < A_required:
+                    score *= 0.5
 
-                        # Tube count penalty
-                        if tubes > 400:
-                            score *= 0.85
-
-                        # Best selection
-                        if score > best_score:
-                            best_score = score
-                            best = (d, pitch, L, tubes, v, dp, tph, pinch, approach, T_out)
+                if score > best_score:
+                    best_score = score
+                    best = {
+                        "tph": tph,
+                        "tubes": tubes,
+                        "velocity": v,
+                        "dp": dp,
+                        "diameter": d,
+                        "pitch": pitch,
+                        "length": L,
+                        "Re": Re,
+                        "h": h,
+                        "A_required": A_required,
+                        "A_actual": A_actual,
+                        "T_gas_out": T_gas_out,
+                        "T_fw_out": T_fw_out,
+                        "T_sat": T_sat,
+                        "m": m,
+                        "rho": rho
+                    }
 
     return best
