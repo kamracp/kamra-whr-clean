@@ -1,6 +1,8 @@
 import streamlit as st
 from physics import *
 
+result = advanced_optimizer(flow, T_in, fw, P, pinch, approach)
+
 st.title("🔥 WHR Auto Sizing Tool")
 
 # -------- ONLY 3 INPUTS --------

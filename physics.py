@@ -132,4 +132,62 @@ def whr_sizing(V, T_in, T_out):
                         "density": rho
                     }
 
+   
+    return best
+def whr_sizing(V, T_in, T_out):
+
+    rho, cp = gas_props(T_in)
+
+    m = V * rho
+    m_sec = m / 3600
+
+    Q = m * cp * (T_in - T_out)
+    tph = Q / 540000
+
+    best = None
+    best_score = -1
+
+    for d in [0.032, 0.038, 0.05]:
+        for L in [2.5, 3, 3.5]:
+            for pr in [1.3, 1.4, 1.5]:
+
+                pitch = d * pr
+                free_area = pitch**2 - (math.pi*d*d/4)
+
+                if free_area <= 0:
+                    continue
+
+                v_target = 10
+                flow_area_req = m_sec / (rho * v_target)
+                tubes = max(int(flow_area_req / free_area), 50)
+
+                flow_area = tubes * free_area
+                v = m_sec / (rho * flow_area)
+
+                rows = int(math.sqrt(tubes))
+                dp = 1.3 * rows * (rho * v*v / 2) / 9.81
+
+                A_actual = tubes * math.pi * d * L
+
+                score = tph
+
+                if v < 8 or v > 11:
+                    score *= 0.7
+
+                if dp > 90:
+                    score *= 0.6
+
+                if score > best_score:
+                    best_score = score
+                    best = {
+                        "tph": tph,
+                        "Q": Q,
+                        "tubes": tubes,
+                        "velocity": v,
+                        "dp": dp,
+                        "diameter": d,
+                        "pitch": pitch,
+                        "length": L
+                    }
+
     return best
