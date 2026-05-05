@@ -11,7 +11,7 @@ T_in = st.number_input("Gas IN Temp (°C)", value=250)
 T_out = st.number_input("Gas OUT Temp (°C)", value=150)
 
 # -------- RUN --------
-if st.button("🚀 Run Auto Design"):
+if st.button(" Run Auto Design"):
 
     # ✅ FIX HERE
     result = physics.whr_sizing(flow, T_in, T_out)
