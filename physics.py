@@ -1,143 +1,135 @@
 import math
 
-# ---------------- GAS PROPERTIES ----------------
+# -----------------------------
+# GAS PROPERTIES
+# -----------------------------
 def gas_props(T):
-    rho = 1.2 * (273/(T+273))
-    cp = 0.24
+    """
+    Approx flue gas properties
+    T in °C
+    """
+    rho = 1.2 * (273 / (T + 273))   # kg/m3
+    cp = 0.24                       # kcal/kg-°C
     return rho, cp
 
-# ---------------- HEAT ----------------
-def heat_available(V, T1, T2):
-    rho, cp = gas_props(T1)
-    m = V * rho
-    Q = m * cp * (T1 - T2)
-    return Q, m
 
-# ---------------- STEAM ----------------
-def steam_generation(Q, P, fw):
-    return max(Q,0) / 540000
+# -----------------------------
+# MAIN WHR SIZING ENGINE
+# -----------------------------
+def whr_sizing(V, T_in, T_out):
+    """
+    Inputs:
+    V      = Flue gas flow (Nm3/hr)
+    T_in   = Gas inlet temp (°C)
+    T_out  = Gas outlet temp (°C)
 
-# ---------------- DEW POINT ----------------
-def dew_point_water(H2O_pct):
-    return 100 + 12 * math.log(max(H2O_pct,1))
+    Output:
+    Optimized WHR design dictionary
+    """
 
-def acid_dew_point(SO2_ppm):
-    if SO2_ppm < 50:
-        return 120
-    return 120 + 0.04 * SO2_ppm
+    # -----------------------------
+    # BASIC CALCULATIONS
+    # -----------------------------
+    rho, cp = gas_props(T_in)
 
-# ---------------- ZUKAUSKAS ----------------
-def zukauskas_htc(v, d, rho, mu=2e-5, k=0.03, Pr=0.7):
-    Re = rho * v * d / mu
+    m = V * rho                    # kg/hr
+    m_sec = m / 3600              # kg/s
 
-    if Re < 100:
-        C, m = 0.9, 0.4
-    elif Re < 1000:
-        C, m = 0.52, 0.5
-    else:
-        C, m = 0.27, 0.63
+    Q = m * cp * (T_in - T_out)   # kcal/hr
 
-    Nu = C * (Re**m) * (Pr**0.36)
-    h = Nu * k / d
+    # Steam generation (rough industrial thumb rule)
+    tph = Q / 540000
 
-    return h, Re
-
-# ---------------- LMTD ----------------
-def lmtd(dT1, dT2):
-    if dT1 <= 0 or dT2 <= 0:
-        return 1
-    return (dT1 - dT2) / math.log(dT1/dT2)
-
-# ---------------- FAN ----------------
-def fan_selection(m, rho, dp, eff=0.7):
-    flow = (m/3600)/rho
-    power = flow * dp * 9.81 / (1000 * eff)
-
-    if dp < 30:
-        draft = "Natural Draft"
-    elif dp < 150:
-        draft = "Induced Draft"
-    else:
-        draft = "Forced Draft"
-
-    return flow, power, draft
-
-# ---------------- OPTIMIZER ----------------
-def advanced_optimizer(V, T_in, fw_in, P, pinch, approach):
-
-    Q, m = heat_available(V, T_in, T_in-100)
-
-    T_sat = 100 + 5*P
-    T_gas_out = T_sat + pinch
-    T_fw_out = T_sat - approach
-
+    # -----------------------------
+    # OPTIMIZATION START
+    # -----------------------------
     best = None
     best_score = -1
 
-    rho, cp = gas_props(T_in)
-    m_sec = m/3600
-
-    for d in [0.032, 0.038, 0.05]:
-        for L in [2.5, 3, 3.5]:
-            for pr in [1.3, 1.4, 1.5]:
+    for d in [0.032, 0.038, 0.05]:       # tube diameter (m)
+        for L in [2.5, 3.0, 3.5]:        # tube length (m)
+            for pr in [1.3, 1.4, 1.5]:   # pitch ratio
 
                 pitch = d * pr
-                free_area = pitch**2 - (math.pi*d*d/4)
+
+                # free flow area per tube
+                free_area = pitch**2 - (math.pi * d**2 / 4)
 
                 if free_area <= 0:
                     continue
 
-                v_target = 10
-                area_req = m_sec / (rho * v_target)
-                tubes = max(int(area_req / free_area), 40)
+                # -----------------------------
+                # TARGET VELOCITY DESIGN
+                # -----------------------------
+                v_target = 10  # m/s ideal
+
+                flow_area_req = m_sec / (rho * v_target)
+
+                tubes = max(int(flow_area_req / free_area), 50)
 
                 flow_area = tubes * free_area
-                v = m_sec / (rho * flow_area)
 
-                rows = int(math.sqrt(tubes))
-                dp = 1.3 * rows * (rho * v*v / 2) / 9.81
+                velocity = m_sec / (rho * flow_area)
 
-                h, Re = zukauskas_htc(v, d, rho)
+                # -----------------------------
+                # PRESSURE DROP
+                # -----------------------------
+                rows = max(int(math.sqrt(tubes)), 1)
 
-                U = 1 / (1/h + 0.0005)
+                dp = 1.3 * rows * (rho * velocity**2 / 2) / 9.81  # mmWC
 
-                LMTD = lmtd((T_in - T_fw_out), (T_gas_out - fw_in))
-
-                A_required = Q / (U * LMTD)
+                # -----------------------------
+                # HEAT TRANSFER AREA
+                # -----------------------------
                 A_actual = tubes * math.pi * d * L
 
-                tph = steam_generation(Q, P, fw_in)
+                # simple LMTD approximation
+                deltaT = max(T_in - T_out, 1)
 
+                U = 35  # kcal/m2-hr-°C (typical WHR range)
+
+                A_required = Q / (U * deltaT)
+
+                # -----------------------------
+                # SCORING LOGIC
+                # -----------------------------
                 score = tph
 
-                if v < 8 or v > 12:
+                # velocity band control
+                if velocity < 8 or velocity > 11:
                     score *= 0.7
 
+                # pressure drop penalty
                 if dp > 90:
                     score *= 0.6
 
+                # under-designed area penalty
                 if A_actual < A_required:
                     score *= 0.5
 
+                # too large system penalty
+                if tubes > 600:
+                    score *= 0.8
+
+                # -----------------------------
+                # BEST DESIGN SELECTION
+                # -----------------------------
                 if score > best_score:
                     best_score = score
                     best = {
                         "tph": tph,
+                        "Q": Q,
                         "tubes": tubes,
-                        "velocity": v,
+                        "velocity": velocity,
                         "dp": dp,
                         "diameter": d,
                         "pitch": pitch,
                         "length": L,
-                        "Re": Re,
-                        "h": h,
                         "A_required": A_required,
                         "A_actual": A_actual,
-                        "T_gas_out": T_gas_out,
-                        "T_fw_out": T_fw_out,
-                        "T_sat": T_sat,
-                        "m": m,
-                        "rho": rho
+                        "rows": rows,
+                        "mass_flow": m,
+                        "density": rho
                     }
 
     return best
