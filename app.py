@@ -1,54 +1,75 @@
 import streamlit as st
-from physics import *
+import physics   # 🔥 stable import
 
-result = advanced_optimizer(flow, T_in, fw, P, pinch, approach)
+st.set_page_config(page_title="WHR Auto Sizing Tool", layout="wide")
 
-st.title("🔥 WHR Auto Sizing Tool")
+st.title("🔥 Waste Heat Recovery (WHR) Auto Sizing Tool")
+st.markdown("### Minimal Input → Automatic Industrial Design")
 
-# -------- ONLY 3 INPUTS --------
-flow = st.number_input("Flue Gas Flow (Nm³/hr)", 20000)
-T_in = st.number_input("Gas IN Temp (°C)", 250)
-T_out = st.number_input("Gas OUT Temp (°C)", 150)
+# ---------------- INPUTS ----------------
+col1, col2, col3 = st.columns(3)
 
-# -------- RUN --------
-if st.button("Run Auto Design"):
+with col1:
+    flow = st.number_input("Flue Gas Flow (Nm³/hr)", value=20000)
 
-    result = whr_sizing(flow, T_in, T_out)
+with col2:
+    T_in = st.number_input("Gas IN Temp (°C)", value=250)
+
+with col3:
+    T_out = st.number_input("Gas OUT Temp (°C)", value=150)
+
+# ---------------- RUN ----------------
+if st.button("🚀 Run Auto Design"):
+
+    result = physics.whr_sizing(flow, T_in, T_out)
 
     if result:
 
-        st.subheader("🔥 Heat Recovery")
-        st.write("Heat Available (kcal/hr):", round(result["Q"],0))
+        st.success("✅ WHR Design Generated")
 
-        st.subheader("🔥 Steam Generation")
-        st.write("Steam (TPH):", round(result["tph"],2))
+        colA, colB, colC = st.columns(3)
 
-        st.subheader("⚙️ Geometry")
-        st.write("Tubes:", result["tubes"])
-        st.write("Diameter:", result["diameter"])
-        st.write("Pitch:", round(result["pitch"],3))
-        st.write("Length:", result["length"])
+        colA.metric("Steam (TPH)", round(result["tph"],2))
+        colB.metric("Velocity (m/s)", round(result["velocity"],2))
+        colC.metric("ΔP (mmWC)", round(result["dp"],2))
 
-        st.subheader("💨 Flow")
-        st.write("Velocity:", round(result["velocity"],2))
-        st.write("ΔP:", round(result["dp"],2))
+        st.markdown("---")
 
-        st.subheader("📐 Area")
-        st.write("Required:", round(result["A_required"],1))
-        st.write("Actual:", round(result["A_actual"],1))
+        col1, col2 = st.columns(2)
 
-        st.subheader("⚠️ Design Check")
+        with col1:
+            st.subheader("🔥 Heat Recovery")
+            st.write("Heat Available (kcal/hr):", round(result["Q"],0))
 
-        if result["velocity"] > 12:
-            st.warning("High velocity")
+        with col2:
+            st.subheader("📐 Area")
+            st.write("Required:", round(result["A_required"],1))
+            st.write("Actual:", round(result["A_actual"],1))
 
-        if result["dp"] > 90:
-            st.warning("High pressure drop")
+        st.markdown("---")
 
-        if result["A_actual"] < result["A_required"]:
-            st.error("Insufficient heat transfer area")
-        else:
-            st.success("Design OK")
+        col3, col4 = st.columns(2)
+
+        with col3:
+            st.subheader("⚙️ Geometry")
+            st.write("Tubes:", result["tubes"])
+            st.write("Rows:", result["rows"])
+            st.write("Diameter:", result["diameter"])
+            st.write("Pitch:", round(result["pitch"],3))
+            st.write("Length:", result["length"])
+
+        with col4:
+            st.subheader("💨 Flow Check")
+            if result["velocity"] > 12:
+                st.warning("High Velocity → erosion risk")
+
+            if result["dp"] > 90:
+                st.warning("High Pressure Drop")
+
+            if result["A_actual"] < result["A_required"]:
+                st.error("Insufficient Heat Transfer Area")
+            else:
+                st.success("Design OK")
 
     else:
-        st.error("No valid design found")
+        st.error("❌ No valid design found")
